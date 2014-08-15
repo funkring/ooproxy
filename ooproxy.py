@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 # -*- coding: utf-8 -*-
 #############################################################################
 #
@@ -18,10 +19,13 @@
 #
 ##############################################################################
 
-from werkzeug.wrappers import Request, Response
-
+from io import BytesIO
 import uno
 import unohelper
+import json
+import eventlet
+import argparse
+from eventlet import Timeout
 from com.sun.star.beans import PropertyValue
 from com.sun.star.uno import Exception as UnoException
 from com.sun.star.connection import NoConnectException, ConnectionSetupException
@@ -30,14 +34,238 @@ from com.sun.star.lang import IllegalArgumentException
 from com.sun.star.io import XOutputStream
 from com.sun.star.io import IOException
  
-DEFAUL_DEFAULT_OPENOFFICE_PORT = 8100
-DEFAUL_DEFAULT_PROXY_PORT = 8099
+class OutputStreamWrapper(unohelper.Base, XOutputStream):
+    """ Minimal Implementation of XOutputStream """
+    def __init__(self, outstream=None):
+        self.data = outstream or BytesIO()
+ 
+    def writeBytes(self, b):
+        self.data.write(b.value)
+ 
+    def close(self):
+        self.data.close()
+         
+    def flush(self):
+        self.data.flush()
+        
+    def closeOutput(self):
+        pass
+    
+    
+class TimeoutException(Exception):
+    pass
 
-@Request.application
-def application(request):
-    return Response('Hello World!')
+
+class NoDataExeption(Exception):
+    pass
+
+
+def info(message):
+    print(message)
+
+def toProperties(**args):
+    props = []
+    for key in args:
+        prop = PropertyValue()
+        prop.Name = key
+        prop.Value = args[key]
+        props.append(prop)
+    return tuple(props)    
+
+def application(fd, sock, args):
+    # vars
+    peer_name = repr(new_sock.getpeername())
+    timeout = args.timeout
+    header = None
+    document = None
+    
+    # helpers functions
+    
+    def writeln(resp):
+        line = "%s\n" % resp
+        line = line.encode(encoding="utf-8")
+        fd.write(line)
+    
+    def readHeader():
+        with Timeout(timeout,TimeoutException):
+            line = fd.readline()
+            if not line:
+                raise NoDataExeption()
+            line = line.decode("utf-8")
+            return json.loads(line)
+        
+    def readData():
+        with Timeout(timeout,TimeoutException):
+            res = fd.read(header["length"])
+            if not res:
+                raise NoDataExeption()
+            return res
+            
+    def closeDocument():
+        try:
+            if document:
+                document.close()
+        except:
+            pass
+        finally:
+            document=None
+   
+    def refreshDocument():
+        # At first update Table-of-Contents.
+        # ToC grows, so page numbers grows too.
+        # On second turn update page numbers in ToC
+        try:
+            document.refresh()
+            indexes = document.getDocumentIndexes()
+            for i in range(0, indexes.getCount()):
+                indexes.getByIndex(i).update()
+        except AttributeError: # ods document does not support refresh
+            # the document doesn't implement the XRefreshable and/or
+            # XDocumentIndexesSupplier interfaces
+            pass
+
+    # logic
+    
+    try:
+        header = readHeader()
+        
+        # initialize     
+        host = header.get("host",args.oo_host)
+        port = header.get("port",args.oo_port)
+        timeout = header.get("timeout",timeout)
+         
+        ooLocalCtx = uno.getComponentContext()        
+        ooLocalResolver = ooLocalCtx.ServiceManager.createInstanceWithContext("com.sun.star.bridge.UnoUrlResolver", ooLocalCtx)
+    
+        ooRemoteCtx = ooLocalResolver.resolve("uno:socket,host=%s,port=%s;urp;StarOffice.ComponentContext" % (host, port))
+        ooRemoteServiceManager = ooRemoteCtx.ServiceManager
+        ooRemoteDesktop = ooRemoteServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", ooRemoteCtx)
+        
+        # ok        
+        writeln("{}")
+        while True:
+            # read
+            header = readHeader()
+            fnct = header["fnct"]
+            if fnct == "close":
+                break
+            elif fnct == "closeDocument":
+                closeDocument()
+                writeln('{}')
+            elif fnct == "putDocument":
+                # cleanup
+                closeDocument()
+                # read data
+                data = readData()
+                inputStream = ooRemoteServiceManager.createInstanceWithContext("com.sun.star.io.SequenceInputStream", ooRemoteCtx)
+                inputStream.initialize((uno.ByteSequence(data),))
+                # load document
+                try:
+                    document = ooRemoteDesktop.loadComponentFromURL('private:stream', "_blank", 0, toProperties(InputStream = inputStream))
+                finally:
+                    inputStream.closeInput()
+                writeln('{}')
+            elif fnct == "printDocument":
+                printer = header.get("printer")
+                if printer:
+                    uno.invoke(document,"setPrinter", toProperties(Name = printer) )
+                uno.invoke(document, "print", toProperties(Wait = True) )
+                writeln('{}')      
+            elif fnct == "refreshDocument":
+                refreshDocument()
+                writeln('{}')
+            elif fnct == "getDocument":
+                filter_name = header.get("filter")
+                refreshDocument()
+                out = OutputStreamWrapper()
+                try:
+                    document.storeToURL("private:stream", toProperties(OutputStream = out, FilterName = filter_name))
+                    writeln('{"length" : %s }' % len(out.data.getvalue()))
+                    fd.write(out.data.getvalue())                   
+                except IOException:
+                    writeln('{ "error" : "io-error", "message" : "Exception during conversion" }')
+            elif fnct == "streamDocument":
+                filter_name = header.get("filter")
+                refreshDocument()
+                out = OutputStreamWrapper(fd)
+                document.storeToURL("private:stream", toProperties(OutputStream = out, FilterName = filter_name))
+                break # break after stream                
+            elif fnct == "insertDocument":
+                data = readData()
+                placeholder_text = "<insert_doc('%s')>" % header["name"]
+                
+                # prepare stream
+                inputStream = ooRemoteServiceManager.createInstanceWithContext("com.sun.star.io.SequenceInputStream", ooRemoteCtx)
+                inputStream.initialize((uno.ByteSequence(data),))
+                
+                # search
+                search = document.createSearchDescriptor()
+                search.SearchString = placeholder_text
+                found = document.findFirst(search)
+                
+                # insert
+                error = False
+                while found:
+                    try:
+                        found.insertDocumentFromURL('private:stream', toProperties(InputStream = inputStream, FilterName = "writer8"))
+                        error = False
+                    except Exception:
+                        error = True
+                if error:
+                    writeln('{ "error" : "io-error", "message" : "Unable to insert document %s" }' % header["name"])
+                else:
+                    writeln("{}")
+                    
+            elif fnct == "addDocument":
+                data = readData()
+                inputStream = ooRemoteServiceManager.createInstanceWithContext("com.sun.star.io.SequenceInputStream", ooRemoteCtx)
+                inputStream.initialize((uno.ByteSequence(data),))
+                try:
+                    document.Text.getEnd().insertDocumentFromURL('private:stream', toProperties(InputStream = inputStream, FilterName = "writer8"))
+                    writeln("{}")
+                except Exception:
+                    writeln('{ "error" : "io-error", "message" : "Unable to insert document" }')
+                    
+            fd.flush()
+                 
+    except IllegalArgumentException:
+        writeln('{ "error": "invalid-url", "message" : "The url is invalid (%s)"')
+    except NoConnectException:
+        writeln('{ "error": "no-connection", "message" : "Failed to connect to OpenOffice.org on host %s, port %s"' % (host, port))
+    except ConnectionSetupException:
+        writeln('{ "error": "no-access", "message" : ""Not possible to accept on a local resource"')
+    except TimeoutException:
+        info("Socket Timeout %s" % peer_name)
+    except NoDataExeption:
+        info("Stream closed %s" % peer_name)
+    finally:        
+        closeDocument()    
+        fd.close()
+        sock.close()
+        info("Client %s disconnected" % peer_name)
+    
 
 if __name__ == '__main__':
-    from werkzeug.serving import run_simple
-    run_simple('localhost', DEFAUL_DEFAULT_PROXY_PORT, application)
+    parser = argparse.ArgumentParser(description="OOProxy Arguments")
+    parser.add_argument("--oo-host", metavar="OO_HOST", type=str, help="The OpenOffice Server Host", default="127.0.0.1")
+    parser.add_argument("--oo-port", metavar="OO_PORT", type=int, help="The OpenOffice Server Port", default=8100)
+    parser.add_argument("--port", metavar="PORT", type=int, help="The OOProxy Port", default=8099)
+    parser.add_argument("--listen", metavar="LISTEN", type=str, help="Listen on Address", default="127.0.0.1")
+    parser.add_argument("--timeout", metavar="TIMEOUT", type=int, help="Timeout in Seconds", default=5)
+    parser.add_argument("--bufsize", metavar="BUFSIZE", type=int, help="Buffer size", default=32768)
+    args = parser.parse_args()
+    
+    info("Server listen on port %s" % args.port)
+    server = eventlet.listen((args.listen, args.port))
+    pool = eventlet.GreenPool()
+    while True:
+        try:
+            new_sock, address = server.accept()
+            print("Client %s connected" % repr(new_sock.getpeername()))
+            fd = new_sock.makefile("rw")
+            pool.spawn_n(application, fd, new_sock, args)
+        except (SystemExit, KeyboardInterrupt):
+            break
+    #from werkzeug.serving import run_simple
+    #run_simple('localhost', DEFAUL_DEFAULT_PROXY_PORT, application)
 
