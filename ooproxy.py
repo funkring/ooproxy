@@ -25,6 +25,10 @@ import unohelper
 import json
 import eventlet
 import argparse
+import logging
+import logging.handlers
+from contexttimer import Timer
+from contexttimer import timer
 from eventlet import Timeout
 from com.sun.star.beans import PropertyValue
 from com.sun.star.uno import Exception as UnoException
@@ -33,6 +37,8 @@ from com.sun.star.beans import UnknownPropertyException
 from com.sun.star.lang import IllegalArgumentException
 from com.sun.star.io import XOutputStream
 from com.sun.star.io import IOException
+
+_logger = logging.getLogger("ooproxy")
  
 class OutputStreamWrapper(unohelper.Base, XOutputStream):
     """ Minimal Implementation of XOutputStream """
@@ -61,7 +67,7 @@ class NoDataExeption(Exception):
 
 
 def info(message):
-    print(message)
+    _logger.info(message)
 
 def toProperties(**args):
     props = []
@@ -156,14 +162,19 @@ def application(fd, sock, args):
                 # cleanup
                 closeDocument()
                 # read data
-                data = readData()
-                inputStream = ooRemoteServiceManager.createInstanceWithContext("com.sun.star.io.SequenceInputStream", ooRemoteCtx)
-                inputStream.initialize((uno.ByteSequence(data),))
+                with Timer() as t:
+                    data = readData()
+                    inputStream = ooRemoteServiceManager.createInstanceWithContext("com.sun.star.io.SequenceInputStream", ooRemoteCtx)
+                    inputStream.initialize((uno.ByteSequence(data),))
+                    _logger.debug("read data takes %s" % t.elapsed)
+                    
                 # load document
-                try:
-                    document = ooRemoteDesktop.loadComponentFromURL('private:stream', "_blank", 0, toProperties(InputStream = inputStream))
-                finally:
-                    inputStream.closeInput()
+                with Timer() as t:
+                    try:
+                        document = ooRemoteDesktop.loadComponentFromURL('private:stream', "_blank", 0, toProperties(InputStream = inputStream))
+                    finally:
+                        inputStream.closeInput()
+                    _logger.debug("load document takes %s" % t.elapsed)
                 writeln('{}')
             elif fnct == "printDocument":
                 printer = header.get("printer")
@@ -185,10 +196,12 @@ def application(fd, sock, args):
                 except IOException:
                     writeln('{ "error" : "io-error", "message" : "Exception during conversion" }')
             elif fnct == "streamDocument":
-                filter_name = header.get("filter")
-                refreshDocument()
-                out = OutputStreamWrapper(fd)
-                document.storeToURL("private:stream", toProperties(OutputStream = out, FilterName = filter_name))
+                with Timer() as t:
+                    filter_name = header.get("filter")
+                    refreshDocument()
+                    out = OutputStreamWrapper(fd)   
+                    document.storeToURL("private:stream", toProperties(OutputStream = out, FilterName = filter_name))
+                    _logger.debug("streamDocument takes %s" % t.elapsed)
                 break # break after stream                
             elif fnct == "insertDocument":
                 data = readData()
@@ -233,11 +246,14 @@ def application(fd, sock, args):
     except NoConnectException:
         writeln('{ "error": "no-connection", "message" : "Failed to connect to OpenOffice.org on host %s, port %s"' % (host, port))
     except ConnectionSetupException:
-        writeln('{ "error": "no-access", "message" : ""Not possible to accept on a local resource"')
+        writeln('{ "error": "no-access", "message" : "Not possible to accept on a local resource"')
     except TimeoutException:
         info("Socket Timeout %s" % peer_name)
     except NoDataExeption:
         info("Stream closed %s" % peer_name)
+    except Exception as e:
+        _logger.fatal(e)
+        writeln('{ "error": "unexpected", "message" : "Unexpected error"')        
     finally:        
         closeDocument()    
         fd.close()
@@ -246,6 +262,9 @@ def application(fd, sock, args):
     
 
 if __name__ == '__main__':
+    logging.basicConfig()
+    logging.getLogger().setLevel(logging.DEBUG)
+    
     parser = argparse.ArgumentParser(description="OOProxy Arguments")
     parser.add_argument("--oo-host", metavar="OO_HOST", type=str, help="The OpenOffice Server Host", default="127.0.0.1")
     parser.add_argument("--oo-port", metavar="OO_PORT", type=int, help="The OpenOffice Server Port", default=8100)
@@ -253,7 +272,13 @@ if __name__ == '__main__':
     parser.add_argument("--listen", metavar="LISTEN", type=str, help="Listen on Address", default="127.0.0.1")
     parser.add_argument("--timeout", metavar="TIMEOUT", type=int, help="Timeout in Seconds", default=5)
     parser.add_argument("--bufsize", metavar="BUFSIZE", type=int, help="Buffer size", default=32768)
+    parser.add_argument("--syslog", dest='syslog', action="store_true", help="Log to syslog")
     args = parser.parse_args()
+    
+    if args.syslog:
+        syslog_handler = logging.handlers.SysLogHandler(address="/dev/log")
+        syslog_handler.setFormatter(logging.Formatter('%(name)s [%(levelname)s] %(message)s'))
+        logging.getLogger().addHandler(syslog_handler)
     
     info("Server listen on port %s" % args.port)
     server = eventlet.listen((args.listen, args.port))
@@ -261,7 +286,7 @@ if __name__ == '__main__':
     while True:
         try:
             new_sock, address = server.accept()
-            print("Client %s connected" % repr(new_sock.getpeername()))
+            _logger.info("Client %s connected" % repr(new_sock.getpeername()))
             fd = new_sock.makefile("rw")
             pool.spawn_n(application, fd, new_sock, args)
         except (SystemExit, KeyboardInterrupt):
