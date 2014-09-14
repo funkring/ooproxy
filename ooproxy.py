@@ -41,12 +41,15 @@ from com.sun.star.io import IOException
 _logger = logging.getLogger("ooproxy")
  
 class OutputStreamWrapper(unohelper.Base, XOutputStream):
-    """ Minimal Implementation of XOutputStream """
+    """ Minimal Implementation of XOutputStream """    
     def __init__(self, outstream=None):
         self.data = outstream or BytesIO()
+        self.length=0
  
     def writeBytes(self, b):
-        self.data.write(b.value)
+        value = b.value        
+        self.length+=len(value)
+        self.data.write(value)
  
     def close(self):
         self.data.close()
@@ -171,6 +174,7 @@ class OOProxy(object):
                 self.readHeader()
                 fnct = self.header["fnct"]
                 if fnct == "close":
+                    self.writeln('{}')
                     break
                 elif fnct == "closeDocument":
                     self.closeDocument()
@@ -213,7 +217,10 @@ class OOProxy(object):
                     try:
                         self.document.storeToURL("private:stream", toProperties(OutputStream = out, FilterName = filter_name))
                         self.writeln('{"length" : %s }' % len(out.data.getvalue()))
-                        self.fd.write(out.data.getvalue())                   
+                        if out.length == 0:
+                            self.writeln('{ "error" : "nodata", "message" : "No Data" }')
+                        else:
+                            self.fd.write(out.data.getvalue())                                           
                     except IOException:
                         self.writeln('{ "error" : "io-error", "message" : "Exception during conversion" }')
                     finally:
