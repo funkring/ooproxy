@@ -242,18 +242,18 @@ def application(fd, sock, args):
             fd.flush()
                  
     except IllegalArgumentException:
-        writeln('{ "error": "invalid-url", "message" : "The url is invalid (%s)"')
+        writeln('{ "error": "invalid-url", "message" : "The url is invalid (%s) }"')
     except NoConnectException:
-        writeln('{ "error": "no-connection", "message" : "Failed to connect to OpenOffice.org on host %s, port %s"' % (host, port))
+        writeln('{ "error": "no-connection", "message" : "Failed to connect to OpenOffice.org on host %s, port %s" }' % (host, port))
     except ConnectionSetupException:
-        writeln('{ "error": "no-access", "message" : "Not possible to accept on a local resource"')
+        writeln('{ "error": "no-access", "message" : "Not possible to accept on a local resource" }')
     except TimeoutException:
         info("Socket Timeout %s" % peer_name)
     except NoDataExeption:
         info("Stream closed %s" % peer_name)
     except Exception as e:
         _logger.fatal(e)
-        writeln('{ "error": "unexpected", "message" : "Unexpected error"')        
+        writeln('{ "error": "unexpected", "message" : "Unexpected error" }')        
     finally:        
         closeDocument()    
         fd.close()
