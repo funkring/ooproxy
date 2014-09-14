@@ -44,12 +44,9 @@ class OutputStreamWrapper(unohelper.Base, XOutputStream):
     """ Minimal Implementation of XOutputStream """    
     def __init__(self, outstream=None):
         self.data = outstream or BytesIO()
-        self.length=0
  
     def writeBytes(self, b):
-        value = b.value        
-        self.length+=len(value)
-        self.data.write(value)
+        self.data.write(b.value)
  
     def close(self):
         self.data.close()
@@ -208,7 +205,7 @@ class OOProxy(object):
                           
                 elif fnct == "refreshDocument":
                     self.refreshDocument()
-                    self. writeln('{}')
+                    self.writeln('{}')
                     
                 elif fnct == "getDocument":
                     filter_name = self.header.get("filter")
@@ -216,11 +213,10 @@ class OOProxy(object):
                     out = OutputStreamWrapper()
                     try:
                         self.document.storeToURL("private:stream", toProperties(OutputStream = out, FilterName = filter_name))
-                        self.writeln('{"length" : %s }' % len(out.data.getvalue()))
-                        if out.length == 0:
-                            self.writeln('{ "error" : "nodata", "message" : "No Data" }')
-                        else:
-                            self.fd.write(out.data.getvalue())                                           
+                        data_len = len(out.data.getvalue())
+                        self.writeln('{"length" : %s }' % data_len )
+                        _logger.info("Send document with length=%s" % data_len)
+                        self.fd.write(out.data.getvalue())                                                                
                     except IOException:
                         self.writeln('{ "error" : "io-error", "message" : "Exception during conversion" }')
                     finally:
@@ -282,7 +278,7 @@ class OOProxy(object):
                 else:
                     raise UnsupportedException(fnct)
                 
-                # FLUSH after finsihed loop                   
+                # FLUSH after finished loop                   
                 self.fd.flush()
                 
         except IllegalArgumentException:
@@ -302,10 +298,22 @@ class OOProxy(object):
         except Exception as e:
             _logger.exception(e)
             self.writeln('{ "error": "unexpected", "message" : "Unexpected error" }')        
-        finally:        
-            self.cleanup()    
-            self.fd.close()
-            self.sock.close()
+        finally:
+            try:
+                self.fd.close()
+            except Exception as e:
+                _logger.exception(e)
+                
+            try:
+                self.sock.close()
+            except Exception as e:
+                _logger.exception(e)
+                
+            try:
+                self.cleanup()
+            except:    
+                _logger.exception(e)
+
             info("Client %s disconnected" % self.peer_name)
        
     
