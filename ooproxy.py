@@ -309,8 +309,8 @@ class OOProxy(object):
             info("Client %s disconnected" % self.peer_name)
        
     
-def application(fd, sock, args):
-    OOProxy(fd, sock, args).run()
+def application(client_fd, client_sock, args):
+    OOProxy(client_fd, client_sock, args).run()
     
     
 if __name__ == '__main__':
@@ -333,14 +333,13 @@ if __name__ == '__main__':
         logging.getLogger().addHandler(syslog_handler)
     
     info("Server listen on port %s" % args.port)
-    server = eventlet.listen((args.listen, args.port))
+    server = eventlet.listen((args.listen, args.port), backlog=50)
     pool = eventlet.GreenPool()
     while True:
         try:
             new_sock, address = server.accept()
             _logger.info("Client %s connected" % repr(new_sock.getpeername()))
-            fd = new_sock.makefile("rw")
-            pool.spawn_n(application, fd, new_sock, args)
+            pool.spawn_n(application, new_sock.makefile("rw"), new_sock, args)
         except (SystemExit, KeyboardInterrupt):
             break
     #from werkzeug.serving import run_simple
