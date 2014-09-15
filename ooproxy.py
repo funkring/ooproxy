@@ -166,13 +166,16 @@ class OOProxy(object):
       
             # send ok        
             self.writeln("{}")
-            while True:
+            
+            # loop while run=true
+            run = True
+            while run:
                 # read
                 self.readHeader()
                 fnct = self.header["fnct"]
                 if fnct == "close":
-                    self.writeln('{}')
-                    break
+                    run = False
+                    self.writeln('{}')                    
                 elif fnct == "closeDocument":
                     self.closeDocument()
                     self.writeln('{}')
@@ -223,6 +226,7 @@ class OOProxy(object):
                         out.closeOutput()
                         
                 elif fnct == "streamDocument":
+                    run = False
                     with Timer() as t:
                         filter_name = self.header.get("filter")
                         self.refreshDocument()
@@ -232,9 +236,6 @@ class OOProxy(object):
                             _logger.debug("streamDocument takes %s" % t.elapsed)
                         finally:      
                             out.closeOutput()
-                    
-                    # BREAK after streamed
-                    break
                                 
                 elif fnct == "insertDocument":
                     data = self.readData()
