@@ -37,6 +37,7 @@ from com.sun.star.beans import UnknownPropertyException
 from com.sun.star.lang import IllegalArgumentException
 from com.sun.star.io import XOutputStream
 from com.sun.star.io import IOException
+from com.sun.star.io import NotConnectedException
 
 _logger = logging.getLogger("ooproxy")
  
@@ -110,6 +111,7 @@ class OOProxy(object):
         
     def readData(self):
         with Timeout(self.timeout,TimeoutException):
+            _logger.info("Read %s bytes of Data" % self.header["length"])
             res = self.fd.read(self.header["length"])
             if not res:
                 raise NoDataExeption()
@@ -283,9 +285,14 @@ class OOProxy(object):
                 self.fd.flush()
                 
         except IllegalArgumentException:
-            self.writeln('{ "error": "invalid-url", "message" : "The url is invalid (%s) }"')
+            _logger.error("Invalid URL!")
+            self.writeln('{ "error": "invalid-url", "message" : "The url is invalid }"')            
         except NoConnectException:
+            _logger.error("Not connected!")
             self.writeln('{ "error": "no-connection", "message" : "Failed to connect to OpenOffice.org on host %s, port %s" }' % (self.host, self.port))
+        except NotConnectedException:
+            _logger.error("Failed accessing stream!")
+            self.writeln('{ "error": "not-connected", "message" : "Connection to OpenOffice.org on host %s, port %s are lost" }' % (self.host, self.port))
         except ConnectionSetupException:
             self.writeln('{ "error": "no-access", "message" : "Not possible to accept on a local resource" }')
         except TimeoutException:
