@@ -25,10 +25,8 @@ import unohelper
 import json
 import eventlet
 import argparse
-import logging
 import logging.handlers
 from contexttimer import Timer
-from contexttimer import timer
 from eventlet import Timeout
 from com.sun.star.beans import PropertyValue
 from com.sun.star.uno import Exception as UnoException
@@ -100,6 +98,7 @@ class OOProxy(object):
         line = "%s\n" % resp
         line = line.encode(encoding="utf-8")
         self.fd.write(line)
+        self.fd.flush();
     
     def readHeader(self):
         with Timeout(self.timeout,TimeoutException):
@@ -221,7 +220,7 @@ class OOProxy(object):
                         data_len = len(out.data.getvalue())
                         self.writeln('{"length" : %s }' % data_len )
                         _logger.info("Send document with length=%s" % data_len)
-                        self.fd.write(out.data.getvalue())                                                                
+                        self.fd.write(out.data.getvalue())                                               
                     except IOException:
                         self.writeln('{ "error" : "io-error", "message" : "Exception during conversion" }')
                     finally:
@@ -355,7 +354,7 @@ if __name__ == '__main__':
         try:
             new_sock, address = server.accept()
             _logger.info("Client %s connected" % repr(new_sock.getpeername()))
-            pool.spawn_n(application, new_sock.makefile("rw"), new_sock, args)
+            pool.spawn_n(application, new_sock.makefile("rwb"), new_sock, args)
         except (SystemExit, KeyboardInterrupt):
             break
     #from werkzeug.serving import run_simple
