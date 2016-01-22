@@ -240,7 +240,12 @@ class OOProxy(object):
                                 
                 elif fnct == "insertDocument":
                     data = self.readData()
-                    placeholder_text = "<insert_doc('%s')>" % self.header["name"]
+                    name = self.header["name"]                    
+                    placeholder_text = "<insert_doc('%s')>" % name
+                    
+                    filterName = "writer8"
+                    if name.lower().endswith(".html"):
+                        filterName = "HTML"
                     
                     # prepare stream
                     inputStream = self.ooRemoteServiceManager.createInstanceWithContext("com.sun.star.io.SequenceInputStream", self.ooRemoteCtx)
@@ -253,15 +258,17 @@ class OOProxy(object):
                         found = self.document.findFirst(search)
                         
                         # insert
-                        error = False
+                        error = None
                         while found:
                             try:
-                                found.insertDocumentFromURL('private:stream', toProperties(InputStream = inputStream, FilterName = "writer8"))
-                                error = False
-                            except Exception:
-                                error = True
+                                found.insertDocumentFromURL('private:stream', toProperties(InputStream = inputStream, FilterName = filterName))
+                                found = self.document.findNext(found.End, search)
+                            except Exception as e:
+                                error = e.message or "Error"
+                                break
+                                
                         if error:
-                            self.writeln('{ "error" : "io-error", "message" : "Unable to insert document %s" }' % self.header["name"])
+                            self.writeln('{ "error" : "io-error", "message" : "Unable to insert document %s, because %s" }' % (self.header["name"]),error)
                         else:
                             self.writeln("{}")
                     finally:
