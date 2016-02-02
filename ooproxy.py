@@ -325,7 +325,7 @@ class OOProxy(object):
                 
             try:
                 self.cleanup()
-            except:    
+            except Exception as e:    
                 _logger.exception(e)
 
             info("Client %s disconnected" % self.peer_name)
