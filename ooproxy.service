@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenOffice Proxy Service
+Require=soffice.service
+
+[Service]
+User=odoo
+ExecStart=/home/odoo/ooproxy/ooproxy.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
